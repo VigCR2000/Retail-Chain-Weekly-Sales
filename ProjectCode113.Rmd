@@ -1,0 +1,506 @@
+---
+title: "Data Analytics code"
+output: html_document
+date: "2023-09-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(gbm)
+library(xgboost)
+library(ipred)
+library(pdp)
+library(glmnet)
+library(broom)
+library(readxl)
+library(randomForest)
+library(caret)
+library(gam)
+library(mgcv)
+library(earth)
+library(rpart)
+library(tidymodels)
+library(rsample)
+library(ggplot2)
+library(coefplot)
+```
+
+Loading & Cleaning the Data 
+```{r}
+cleaned_data <- read_excel('/Users/vigneshravikumar/Desktop/DA Project/cleaned_data1.xlsx')
+cleaned_data<- unique(cleaned_data)
+cleaned_data <- na.omit(cleaned_data)
+```
+
+**Spliting the Data**
+```{r}
+split_ratio <- 0.8
+train_indices <- createDataPartition(cleaned_data$Weekly_Sales, p = split_ratio, list = FALSE)
+trainingdata <- cleaned_data[train_indices, ]
+testdata <- cleaned_data[-train_indices, ]
+
+```
+names(cleaned_data)
+```{r}
+library(corrplot)
+corr_data= subset(cleaned_data,select = c(Weekly_Sales,IsHoliday,Temperature,Fuel_Price,MarkDown1,MarkDown2,MarkDown3,MarkDown4,MarkDown5,CPI,Unemployment,Size))
+
+correlation_matrix <- cor(corr_data)
+corrplot(correlation_matrix, method = "color")
+```
+
+
+**Multiple Linear Regression model**
+```{r}
+mlr_model <- lm(Weekly_Sales ~ Temperature+ Fuel_Price + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + MarkDown5 + CPI + Unemployment + IsHoliday + Size + Type, 
+                data = trainingdata) # fit
+
+mlr_ypred <- predict(mlr_model, testdata) # predict
+
+# Training R^2
+print(paste('Training R^2: ', summary(mlr_model)$r.squared, sep = ''))
+
+# Test R^2
+print(paste('Test R^2: ', cor(testdata$Weekly_Sales, mlr_ypred)^2, sep = ''))
+
+# Training RMSE
+print(paste('Training RMSE: ','$', 
+            sqrt(mean((trainingdata$Weekly_Sales - mlr_model$fitted.values)^2)), 
+             sep = ''))
+
+# Test RMSE
+print(paste('Test RMSE: ','$', 
+            sqrt(mean((testdata$Weekly_Sales - mlr_ypred)^2)), 
+             sep = ''))
+```
+
+```{r}
+model_summary<-summary(mlr_model)
+model_summary
+```
+```{r}
+p_values <- model_summary$coefficients[, "Pr(>|t|)"]
+variable_names <- rownames(model_summary$coefficients)
+
+p_value_table <- data.frame(Variable = variable_names, P_Value = p_values)
+
+sorted_table <- p_value_table[order(p_value_table$P_Value), ]
+
+print(sorted_table)
+```
+```{r}
+p_value_plot_data <- data.frame(Variable = variable_names, P_Value = p_values)
+ggplot(p_value_plot_data, aes(x = Variable, y = P_Value)) +
+  geom_point(size = 3, color = "lightblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "p-values of predictor variables wrt Weekly_Sales",
+       x = "predictor variables",
+       y = "p-values")
+```
+
+
+</br>
+We find the predictor variables using the MLR model summary. The predictor variables that we have chosen are MarkDown1, MarkDown3, CPI,Unemployment,IsHoliday,Size,Type. The Response Variable is Weekly Sales
+</br>
+
+
+**Model 1 GLM Model**
+```{r}
+glm_model <- glm(Weekly_Sales~ Fuel_Price + MarkDown3 +MarkDown4 + CPI +Unemployment + Size+ Type, data = trainingdata) 
+glm_ypred <- predict(glm_model, testdata) 
+
+
+
+# Test R^2
+print(paste('Test R^2: ', cor(testdata$Weekly_Sales, glm_ypred)^2, sep = ''))
+
+# Training RMSE
+print(paste('Training RMSE: ','$', 
+            sqrt(mean((trainingdata$Weekly_Sales - glm_model$fitted.values)^2)), 
+             sep = ''))
+print(paste('Test RMSE: ','$', sqrt(mean((testdata$Weekly_Sales - glm_ypred)^2))))
+```
+```{r}
+ggplot(cleaned_data, aes(y = Weekly_Sales)) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Weekly Sales", y = "Weekly Sales")
+
+```
+```{r}
+coef_data <- tidy(glm_model)
+
+# Create a coefficient plot
+coefplot(
+  coef_data,
+  title = "Coefficient Plot for GLM",
+  ylab = "Predictor",
+  interval = "confidence",
+  errorbar = "x",  # Specify the error bars in the horizontal direction
+  xlim = c(-2, 2)  # Adjust the x-axis limits as needed
+)
+```
+
+
+```{r}
+# Assuming you have a "Date" column in your testdata dataframe
+# If your "Date" column is not in Date format, convert it to Date format
+testdata$Date <- as.Date(testdata$Date)
+
+# Create a new dataframe with Date, actual values, and predicted values
+comparison_df <- data.frame(
+  Date = testdata$Date,
+  Actual = testdata$Weekly_Sales,
+  Predicted = glm_ypred
+)
+
+# Load necessary libraries
+library(ggplot2)
+
+# Create a line graph
+plot <- ggplot(data = comparison_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(x = "Date", y = "Weekly Sales", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red"), labels = c("Actual", "Predicted")) +
+  ggtitle("Comparison of Actual and Predicted Weekly Sales GLM model")
+
+# Set the width and height (in inches) to increase the total size
+width_inch <- 30  # Set your desired width
+height_inch <- 4   # Set your desired height
+
+# Save the plot as an image file with the specified width and height
+ggsave("GLMcomparison_plot.png", plot, width = width_inch, height = height_inch)
+```
+
+**Model 2 GAM Model**
+```{r}
+gam_model <- gam( Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type,
+              data = trainingdata)
+
+gam_ypred <- predict(gam_model, newdata = testdata)
+print(paste('Test RMSE: ','$',sqrt(mean((testdata$Weekly_Sales - gam_ypred)^2, na.rm = T))))
+```
+```{r}
+# Assuming you have a "Date" column in your testdata dataframe
+# If your "Date" column is not in Date format, convert it to Date format
+testdata$Date <- as.Date(testdata$Date)
+
+# Create a new dataframe with Date, actual values, and predicted values
+comparisongam_df <- data.frame(
+  Date = testdata$Date,
+  Actual = testdata$Weekly_Sales,
+  Predicted = gam_ypred
+)
+
+# Load necessary libraries
+library(ggplot2)
+
+# Create a line graph
+plot <- ggplot(data = comparisongam_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(x = "Date", y = "Weekly Sales", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red"), labels = c("Actual", "Predicted")) +
+  ggtitle("Comparison of Actual and Predicted Weekly Sales GAM model")
+
+# Set the width and height (in inches) to increase the total size
+width_inch <- 30  # Set your desired width
+height_inch <- 4   # Set your desired height
+
+# Save the plot as an image file with the specified width and height
+ggsave("Gamcomparison_plot.png", plot, width = width_inch, height = height_inch)
+```
+
+**Model 3 MARS Model**
+```{r}
+mars <- earth(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, 
+                data = trainingdata)
+mars_ypred <- predict(mars, testdata)
+# Assuming you have a dataframe named 'df' and you want to change the column name 'OldName' to 'NewName'
+colnames(mars_ypred)[colnames(mars_ypred) == 'Weekly_Sales'] <- 'Predicted'
+print(paste('Test RMSE: ','$',sqrt(mean((testdata$Weekly_Sales - mars_ypred)^2, na.rm = T))))
+```
+```{r}
+# Assuming you have a "Date" column in your testdata dataframe
+# If your "Date" column is not in Date format, convert it to Date format
+testdata$Date <- as.Date(testdata$Date)
+
+# Create a new dataframe with Date, actual values, and predicted values
+comparisonmars_df <- data.frame(
+  Date = testdata$Date,
+  Actual = testdata$Weekly_Sales,
+  Predicted = mars_ypred
+)
+
+# Load necessary libraries
+library(ggplot2)
+
+# Create a line graph
+plot <- ggplot(data = comparisonmars_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(x = "Date", y = "Weekly Sales", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red"), labels = c("Actual", "Predicted")) +
+  ggtitle("Comparison of Actual and Predicted Weekly Sales MARS model")
+
+# Set the width and height (in inches) to increase the total size
+width_inch <- 30  # Set your desired width
+height_inch <- 4   # Set your desired height
+
+# Save the plot as an image file with the specified width and height
+ggsave("MARScomparison_plot.png", plot, width = width_inch, height = height_inch)
+```
+
+**Model 4 CART Model**
+```{r}
+cart_model <- rpart(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = trainingdata)
+                
+cart_ypred2 <- predict(cart_model, testdata)
+
+rmse <- sqrt(mean((testdata$Weekly_Sales - cart_ypred2)^2))
+print(paste("Test RMSE","$",rmse))
+```
+```{r}
+# Assuming you have a "Date" column in your testdata dataframe
+# If your "Date" column is not in Date format, convert it to Date format
+testdata$Date <- as.Date(testdata$Date)
+
+# Create a new dataframe with Date, actual values, and predicted values
+comparisoncart_df <- data.frame(
+  Date = testdata$Date,
+  Actual = testdata$Weekly_Sales,
+  Predicted = cart_ypred2
+)
+
+# Load necessary libraries
+library(ggplot2)
+
+# Create a line graph
+plot <- ggplot(data = comparisoncart_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+  geom_line(aes(y = Predicted, color = "Predicted"), size = 1, linetype = "dashed") +
+  labs(x = "Date", y = "Weekly Sales", color = "Legend") +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red"), labels = c("Actual", "Predicted")) +
+  ggtitle("Comparison of Actual and Predicted Weekly Sales MARS model")
+
+# Set the width and height (in inches) to increase the total size
+width_inch <- 30  # Set your desired width
+height_inch <- 4   # Set your desired height
+
+# Save the plot as an image file with the specified width and height
+ggsave("Cartcomparison_plot.png", plot, width = width_inch, height = height_inch)
+```
+
+**Model 5 Bagging Model**
+```{r}
+bagging_mod <- bagging(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = trainingdata, nbagg = 100, coob = TRUE)
+ypred <- predict(bagging_mod, newdata = testdata)
+
+
+print(paste('Test RMSE: ','$', round(sqrt(mean((testdata$Weekly_Sales - ypred)^2)),2)))
+```
+
+**Model 6 Random Forests**
+```{r}
+rf_mod <- randomForest(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, 
+                       data = trainingdata, ntree = 100, 
+                       mtry = 3, nodesize = 10,
+                       importance = TRUE)
+ypred_rf <- predict(rf_mod, newdata = testdata)
+
+print(paste('Test RMSE: ','$', round(sqrt(
+  mean((testdata$Weekly_Sales - ypred_rf)^2)), 2)))
+```
+
+
+
+**Model 7 Boosting Model**
+```{r}
+gbm_mod <- gbm(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = trainingdata, n.trees = 500,shrinkage = 0.01, interaction.depth = 3)
+ypred_gbm <- predict(gbm_mod, testdata, n.trees = 500) 
+
+
+print(paste('Test RMSE: ','$',round(sqrt(mean((testdata$Weekly_Sales - ypred_gbm)^2)),2)))
+```
+
+## K-Fold Method
+**Model 1 5-fold GLM Model**
+```{r}
+kfold_fold <- 5
+folds <- cut(seq(1,nrow(cleaned_data)),breaks=kfold_fold,labels=FALSE)
+sum <- 0
+for(i in 1:kfold_fold){
+    testIndexes <- which(folds==i,arr.ind=TRUE)
+    test_data <- cleaned_data[testIndexes, ]
+    training_data <- cleaned_data[-testIndexes, ]
+    
+    glm_model <- glm( Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = training_data, family = gaussian(link = 'identity')) 
+
+    glm_ypred <- predict(glm_model, test_data) 
+    rmse_value <- sqrt(mean((test_data$Weekly_Sales - glm_ypred)^2))
+sum <- sum + rmse_value
+}
+avg_rmse <- sum/kfold_fold
+print(paste('GLM Avg Test RMSE: ',  '$', avg_rmse, sep = ''))
+```
+
+**Model 2 5-fold GAM Model**
+```{r}
+kfold_foldgam <- 5
+foldsgam <- cut(seq(1,nrow(cleaned_data)),breaks=kfold_foldgam,labels=FALSE)
+sum <- 0
+for(i in 1:kfold_foldgam){
+    testIndexes <- which(foldsgam==i,arr.ind=TRUE)
+    test_data <- cleaned_data[testIndexes, ]
+    training_data <- cleaned_data[-testIndexes, ]
+    gam_model <- gam(Weekly_Sales ~ s(Fuel_Price) + s(MarkDown2) +s(MarkDown3)+ s(CPI) + s(Unemployment) + IsHoliday + s(Size) + Type, data = training_data) 
+gam_ypred <- predict(gam_model, test_data) 
+rmsegam_value <- sqrt(mean((test_data$Weekly_Sales - gam_ypred)^2))
+sum <- sum + rmsegam_value
+}
+avg_rmse <- sum/kfold_foldgam
+print(paste('GAM Avg Test RMSE: ','$',avg_rmse, sep = ''))
+```
+
+**Model 3 5-fold MARS Model**
+```{r}
+kfold_fold <- 5
+folds <- cut(seq(1,nrow(cleaned_data)),breaks=kfold_fold,labels=FALSE)
+sum <- 0
+for(i in 1:kfold_fold)
+  {
+    testIndexes <- which(folds==i,arr.ind=TRUE)
+    testdata <- cleaned_data[testIndexes, ]
+    trainingdata <- cleaned_data[-testIndexes, ]
+    mars_model <- earth (Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type,
+                         data = trainingdata) 
+mars_ypred <- predict(glm_model, testdata) 
+rmse_value <- sqrt(mean((testdata$Weekly_Sales - mars_ypred)^2))
+sum <- sum + rmse_value
+}
+avg_rmse <- sum/kfold_fold
+print(paste('MARS Avg Test RMSE: ', '$', avg_rmse, sep = ''))
+```
+
+**Model 4 5-fold CART Model**
+```{r}
+set.seed(123)
+k <- 5
+n <- nrow(cleaned_data)
+fold_indices <- sample(1:k, n, replace = TRUE)
+test_rmse_values <- numeric(k)
+for (i in 1:k) 
+  {
+  train_data <- cleaned_data[fold_indices != i, ]
+  test_data <- cleaned_data[fold_indices == i, ]
+
+  cart_model <- rpart(Weekly_Sales ~ Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = train_data)
+
+  test_predictions <- predict(cart_model, newdata = test_data)
+  test_rmse_values[i] <- sqrt(mean((test_data$Weekly_Sales - test_predictions)^2))
+}
+average_test_rmse <- mean(test_rmse_values)
+print(paste("Average Test RMSE:",'$', average_test_rmse))
+```
+
+
+**Model 5 5-fold Bagging Cross Validations**
+```{r}
+set.seed(123)
+k <- 5
+n <- nrow(cleaned_data)
+fold_indices <- sample(1:k, n, replace = TRUE)
+test_rmse_values <- numeric(k)
+for (i in 1:k) 
+  {
+  train_data <- cleaned_data[fold_indices != i, ]
+  test_data <- cleaned_data[fold_indices == i, ]
+
+  bagging_mod <- bagging(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type,
+                         data = train_data, nbagg = 100, coob = TRUE)
+
+  test_predictions <- predict(bagging_mod, newdata = test_data)
+  test_rmse_values[i] <- sqrt(mean((test_data$Weekly_Sales - test_predictions)^2))
+}
+average_test_rmse <- mean(test_rmse_values)
+print(paste("Average Test RMSE: ",'$', average_test_rmse))
+
+```
+
+**Model 6 5-Fold Boosting Method**
+```{r}
+gbm_mod2 <- gbm(Weekly_Sales ~ Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data = trainingdata, n.trees = 2000, shrinkage = 0.2, interaction.depth = 3, cv.folds = 5)
+ypred_gbm <- predict(gbm_mod2, testdata, n.trees = 500) # need to specify the number of trees -- same as training model
+
+print(paste('Test RMSE: ','$', round(sqrt(mean((testdata$Weekly_Sales - ypred_gbm)^2)),2)))
+```
+
+
+**Model 7 5-fold Hypertuned MARS Model**
+```{r}
+cv <- vfold_cv(cleaned_data, v = 5)
+
+model_recipe <- recipe(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, data= cleaned_data)
+
+mars_mod5 <- mars(num_terms = tune(), prod_degree = tune(), 
+                  prune_method = tune()) %>% set_engine('earth') %>%
+  set_mode('regression')
+
+mars_wf <- workflow() %>% add_recipe(model_recipe) %>% add_model(mars_mod5)
+
+mars_grid <- expand.grid(
+  num_terms = c(8,10,12,14,16),
+  prod_degree =1:4 ,
+  prune_method = c('backward', 'forward', 'none')
+)
+mars_tuning_results <- mars_wf %>% tune_grid(resamples = cv, grid = mars_grid)
+mars_best_parameters <- mars_tuning_results %>% select_best(metric = 'rmse')
+mars_wf2 <- mars_wf %>% finalize_workflow(mars_best_parameters)
+mars_fit <- mars_wf2 %>% fit_resamples(cv, 
+                                       control = control_resamples(
+                                         save_pred = T))
+performance <- mars_fit %>% collect_metrics()
+print(paste('Tuned MARS Model Test RMSE: ','$', performance[1,3], sep = ''))
+
+```
+
+**Model 8 5-fold RandomForest**
+```{r}
+kfold_fold <- 5
+folds <- cut(seq(1,nrow(cleaned_data)),breaks=kfold_fold,labels=FALSE)
+sum <- 0
+for(i in 1:kfold_fold){
+    testIndexes <- which(folds==i,arr.ind=TRUE)
+    test_data <- cleaned_data[testIndexes, ]
+    training_data <- cleaned_data[-testIndexes, ]
+rf_mod <- randomForest(Weekly_Sales ~  Fuel_Price + MarkDown2 +MarkDown3 + CPI +Unemployment +IsHoliday+ Size+ Type, 
+                       data = training_data, ntree = 100, 
+                       mtry = 3, nodesize = 10,
+                       importance = TRUE)
+ypred_rf <- predict(rf_mod, newdata = test_data)
+    rmse_value <- sqrt(mean((test_data$Weekly_Sales - ypred_rf)^2))
+sum <- sum + rmse_value
+}
+avg_rmse <- sum/kfold_fold
+print(paste('RF Avg Test RMSE: $ ', avg_rmse, sep = ''))
+```
+
+```{r}
+RMSEval <- read_excel("C:/Users/chara/Documents/Documents/EME 597 Data Analytics/Project/Final RMSE values.xlsx")
+```
+```{r}
+
+# Create a bar plot
+ggplot(data = RMSEval, aes(x = Model, y = RMSE)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Supervised Learning Models", y = "Test RMSE") +
+  ggtitle("Test RMSE for Supervised Learning Models")
+
+```
+
